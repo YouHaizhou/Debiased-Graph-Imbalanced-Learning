@@ -1,0 +1,4 @@
+# 忽略所有日志文件
+*.log
+experiments/logs/
+*.log.*
