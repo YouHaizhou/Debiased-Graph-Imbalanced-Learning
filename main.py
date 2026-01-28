@@ -10,6 +10,13 @@ from models.base_gcn import GCN
 from models.iceberg import IceBergModel
 from utils.data_utils import make_imbalanced
 
+import sys
+import io
+
+# 强制标准输出和标准错误流使用 UTF-8 编码
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
+
 # --- 参数配置 ---
 parser = argparse.ArgumentParser()
 parser.add_argument('--dataset', type=str, default='Cora')
@@ -120,5 +127,5 @@ for epoch in range(1, args.epochs + 1):
                 'min_recall': cm[0,0] / (cm[0,:].sum() + 1e-6)
             }
 
-print(f"\n模式: {args.mode} 实验结果:")
+print(f"\nMode: {args.mode} Results:")
 print(f"Accuracy: {final_results['acc']:.4f}, Macro-F1: {final_results['f1']:.4f}, Minority Recall: {final_results['min_recall']:.4f}")

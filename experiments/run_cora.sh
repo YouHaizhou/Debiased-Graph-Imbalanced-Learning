@@ -1,5 +1,8 @@
 #!/bin/bash
 
+export LANG=en_US.UTF-8
+export PYTHONIOENCODING=utf-8
+
 # --- 配置信息 ---
 DATASET="Cora"
 EPOCHS=200
