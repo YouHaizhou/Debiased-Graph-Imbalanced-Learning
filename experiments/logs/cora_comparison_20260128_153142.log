@@ -1,0 +1,31 @@
+==========================================================
+开始节点分类实验对比 - 数据集: Cora
+==========================================================
+Step 1/4: Running Standard...
+Downloading https://github.com/kimiyoung/planetoid/raw/master/data/ind.cora.x
+Downloading https://github.com/kimiyoung/planetoid/raw/master/data/ind.cora.tx
+Downloading https://github.com/kimiyoung/planetoid/raw/master/data/ind.cora.allx
+Downloading https://github.com/kimiyoung/planetoid/raw/master/data/ind.cora.y
+Downloading https://github.com/kimiyoung/planetoid/raw/master/data/ind.cora.ty
+Downloading https://github.com/kimiyoung/planetoid/raw/master/data/ind.cora.ally
+Downloading https://github.com/kimiyoung/planetoid/raw/master/data/ind.cora.graph
+Downloading https://github.com/kimiyoung/planetoid/raw/master/data/ind.cora.test.index
+Processing...
+Done!
+
+ģʽ: standard ʵ����:
+Accuracy: 0.8230, Macro-F1: 0.8125, Minority Recall: 0.7692
+Step 2/4: Running Imbalanced...
+
+ģʽ: imbalanced ʵ����:
+Accuracy: 0.7510, Macro-F1: 0.6726, Minority Recall: 0.0000
+Step 3/4: Running Weighted...
+
+ģʽ: weighted ʵ����:
+Accuracy: 0.7800, Macro-F1: 0.7611, Minority Recall: 0.3923
+Step 4/4: Running IceBerg+...
+
+ģʽ: iceberg_plus ʵ����:
+Accuracy: 0.7520, Macro-F1: 0.6774, Minority Recall: 0.0000
+==========================================================
+实验完成，结果已保存至: experiments/logs/cora_comparison_20260128_153142.log
