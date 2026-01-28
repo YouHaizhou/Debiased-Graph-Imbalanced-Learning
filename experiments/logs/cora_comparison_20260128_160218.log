@@ -1,0 +1,29 @@
+==========================================================
+开始节点分类实验对比 - 数据集: Cora
+时间: Wed, Jan 28, 2026  4:02:18 PM
+==========================================================
+==========================================================
+开始节点分类实验对比 - 数据集: Cora
+==========================================================
+Step 1/5: Running Standard...
+
+ģʽ: standard ʵ����:
+Accuracy: 0.8150, Macro-F1: 0.8027, Minority Recall: 0.7692
+Step 2/5: Running Imbalanced...
+
+ģʽ: imbalanced ʵ����:
+Accuracy: 0.7530, Macro-F1: 0.6823, Minority Recall: 0.0000
+Step 3/5: Running Weighted...
+
+ģʽ: weighted ʵ����:
+Accuracy: 0.7610, Macro-F1: 0.7194, Minority Recall: 0.1769
+Step 4/5: Running IceBerg (Original)...
+
+ģʽ: iceberg_original ʵ����:
+Accuracy: 0.7380, Macro-F1: 0.6691, Minority Recall: 0.0000
+Step 5/5: Running IceBerg+ (Ours)...
+
+ģʽ: iceberg_plus ʵ����:
+Accuracy: 0.7520, Macro-F1: 0.6924, Minority Recall: 0.0000
+==========================================================
+实验完成，结果已保存至: experiments/logs/cora_comparison_20260128_160218.log

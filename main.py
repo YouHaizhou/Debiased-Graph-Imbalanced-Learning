@@ -13,7 +13,9 @@ from utils.data_utils import make_imbalanced
 # --- 参数配置 ---
 parser = argparse.ArgumentParser()
 parser.add_argument('--dataset', type=str, default='Cora')
-parser.add_argument('--mode', type=str, choices=['standard', 'imbalanced', 'weighted', 'iceberg_plus'], required=True)
+parser.add_argument('--mode', type=str, 
+                    choices=['standard', 'imbalanced', 'weighted', 'iceberg_original', 'iceberg_plus'], 
+                    required=True)
 parser.add_argument('--epochs', type=int, default=200)
 parser.add_argument('--mu', type=float, default=1.0, help='DB调整强度')
 parser.add_argument('--lam', type=float, default=0.1, help='无监督损失权重')
@@ -42,11 +44,8 @@ def train(epoch):
     model.train()
     optimizer.zero_grad()
     
-    # IceBerg+ 增强逻辑 (包含预热与平滑)
-    if args.mode == 'iceberg_plus':
-        warmup_limit = args.epochs // 4 # 25% 预热期
-        
-        # 1. 估算伪标签分布 (带拉普拉斯平滑拓展)
+    # --- IceBerg 逻辑 (Original vs Plus) ---
+    if args.mode in ['iceberg_original', 'iceberg_plus']:
         with torch.no_grad():
             model.eval()
             logits_all = model(data.x, data.edge_index)
@@ -54,16 +53,26 @@ def train(epoch):
             unlabel_mask = ~data.train_mask
             pseudo_mask = unlabel_mask & (conf >= conf[unlabel_mask].mean())
             
-            # [拓展] 拉普拉斯平滑处理，防止 pi_c 为 0 导致 log 崩溃
-            pi_c = (torch.bincount(pred_pseudo[pseudo_mask], minlength=dataset.num_classes).float() + 1.0)
-            pi_c /= pi_c.sum()
+            # 统计分布 pi_c
+            raw_counts = torch.bincount(pred_pseudo[pseudo_mask], minlength=dataset.num_classes).float()
+            
+            if args.mode == 'iceberg_plus':
+                # [增强] 拉普拉斯平滑：+1 确保 pi_c 永不为 0
+                pi_c = (raw_counts + 1.0) / (raw_counts.sum() + dataset.num_classes)
+            else:
+                # [原始] 仅使用基础 epsilon 防止除零
+                pi_c = raw_counts / (raw_counts.sum() + 1e-6)
 
         model.train()
         out = model(data.x, data.edge_index)
         loss_sup = F.cross_entropy(out[data.train_mask], data.y[data.train_mask])
         
-        # [拓展] 预热策略：预热期内不使用无监督平衡损失
+        # 判定是否触发无监督平衡
+        # original 模式 warmup_limit 为 0；plus 模式为总 epoch 的 25%
+        warmup_limit = (args.epochs // 4) if args.mode == 'iceberg_plus' else 0
+        
         if epoch > warmup_limit and pseudo_mask.sum() > 0:
+            # 使用 pi_c 进行 Logit 调整
             logits_pseudo_adj = out[pseudo_mask] + args.mu * torch.log(pi_c + 1e-6)
             loss_unsup = F.cross_entropy(logits_pseudo_adj, pred_pseudo[pseudo_mask])
             loss = loss_sup + args.lam * loss_unsup
