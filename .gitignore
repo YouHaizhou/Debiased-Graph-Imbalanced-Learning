@@ -2,3 +2,6 @@
 *.log
 experiments/logs/
 *.log.*
+
+*.md
+docs/

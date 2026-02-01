@@ -6,8 +6,10 @@ from sklearn.metrics import confusion_matrix, f1_score
 import torch_geometric.transforms as T
 from torch_geometric.datasets import Planetoid
 
-from models.base_gcn import GCN
+from models.gcn import GCN
 from models.iceberg import IceBergModel
+from models.iceberg_plus import IceBergPlusModel
+from utils.threshold_utils import get_threshold_mask
 from utils.data_utils import make_imbalanced
 
 import sys
@@ -26,7 +28,21 @@ parser.add_argument('--mode', type=str,
 parser.add_argument('--epochs', type=int, default=200)
 parser.add_argument('--mu', type=float, default=1.0, help='DB调整强度')
 parser.add_argument('--lam', type=float, default=0.1, help='无监督损失权重')
+#置信度策略
+parser.add_argument('--threshold_strategy', type=str, default='dynamic_mean',
+                    choices=['dynamic_mean', 'global_mean', 'fixed'])
+parser.add_argument('--fixed_threshold', type=float, default=0.7)
+parser.add_argument('--diagnose', action='store_true', help='打印伪标签分布、pi_c、少数类logit等诊断信息')
+# Noise-Tolerant Double Balancing (论文 Eq 9)，仅 iceberg_original 时生效
+parser.add_argument('--beta', type=float, default=0.0, help='NT-DB 对称项权重，>0 时 loss_unsup = (1+beta)*CE')
+
 args = parser.parse_args()
+
+# 诊断用：少数类类别（与 make_imbalanced 一致）
+MINORITY_CLASS = 0
+# 诊断采样 epoch（首轮、warmup 后、中期、末轮）
+_warmup_limit = (args.epochs // 4) if args.mode == 'iceberg_plus' else 0
+DIAG_EPOCHS = sorted(set([1, max(1, _warmup_limit + 1), args.epochs // 2, args.epochs]))
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -40,6 +56,8 @@ if args.mode != 'standard':
 
 # --- 模型与优化器初始化 ---
 if args.mode == 'iceberg_plus':
+    model = IceBergPlusModel(dataset.num_features, 16, dataset.num_classes).to(device)
+elif args.mode == 'iceberg_original':
     model = IceBergModel(dataset.num_features, 16, dataset.num_classes).to(device)
 else:
     model = GCN(dataset.num_features, 16, dataset.num_classes).to(device)
@@ -51,24 +69,45 @@ def train(epoch):
     model.train()
     optimizer.zero_grad()
     
-    # --- IceBerg 逻辑 (Original vs Plus) ---
     if args.mode in ['iceberg_original', 'iceberg_plus']:
         with torch.no_grad():
             model.eval()
             logits_all = model(data.x, data.edge_index)
-            conf, pred_pseudo = F.softmax(logits_all, dim=-1).max(dim=-1)
-            unlabel_mask = ~data.train_mask
-            pseudo_mask = unlabel_mask & (conf >= conf[unlabel_mask].mean())
-            
-            # 统计分布 pi_c
+            probs = torch.softmax(logits_all, dim=-1)
+            conf, pred_pseudo = probs.max(dim=-1)
+            # 论文 Algorithm 1: get_confidence(logits) -> confidence = max(softmax), pred = argmax
+            # 论文 Eq (5): 动态阈值 τ' = (1/|V_U|) Σ_j max(f_θ(v_j))
+            strategy = 'dynamic_mean' if args.mode == 'iceberg_original' else args.threshold_strategy
+            pseudo_mask, _ = get_threshold_mask(
+                conf, ~data.train_mask,
+                strategy=strategy,
+                threshold_value=args.fixed_threshold
+            )
+            # 论文 Eq (6) + Algorithm 1: 伪标签类别计数，再归一化为分布 π_c（用于 Eq 8 balanced softmax）
             raw_counts = torch.bincount(pred_pseudo[pseudo_mask], minlength=dataset.num_classes).float()
-            
             if args.mode == 'iceberg_plus':
-                # [增强] 拉普拉斯平滑：+1 确保 pi_c 永不为 0
                 pi_c = (raw_counts + 1.0) / (raw_counts.sum() + dataset.num_classes)
             else:
-                # [原始] 仅使用基础 epsilon 防止除零
+                # 论文：π_c 为伪标签类比例；零计数时 log(π_c+ε) 保持数值稳定
                 pi_c = raw_counts / (raw_counts.sum() + 1e-6)
+
+            # 诊断：伪标签分布、pi_c、少数类 logit（在指定 epoch 打印）
+            if getattr(args, 'diagnose', False) and epoch in DIAG_EPOCHS:
+                n_pseudo = int(pseudo_mask.sum().item())
+                pseudo_dist = (raw_counts / (raw_counts.sum() + 1e-6)).cpu().tolist()
+                pi_c_list = pi_c.cpu().tolist()
+                test_minority_mask = data.test_mask & (data.y == MINORITY_CLASS)
+                if test_minority_mask.sum() > 0:
+                    min_logits = logits_all[test_minority_mask, MINORITY_CLASS].cpu()
+                    other_max = logits_all[test_minority_mask].cpu().clone()
+                    other_max[:, MINORITY_CLASS] = -1e9
+                    other_max = other_max.max(dim=1).values
+                    print(f"[Diagnose Epoch {epoch}] Pseudo#={n_pseudo} | "
+                          f"Pseudo_dist={[round(x, 4) for x in pseudo_dist]} | "
+                          f"pi_c={[round(x, 4) for x in pi_c_list]}")
+                    print(f"  Test minority nodes (n={int(test_minority_mask.sum())}): "
+                          f"minority_logit mean={min_logits.mean():.4f} min={min_logits.min():.4f} max={min_logits.max():.4f} | "
+                          f"other_max_logit mean={other_max.mean():.4f} (minority<other -> 预测多数类)")
 
         model.train()
         out = model(data.x, data.edge_index)
@@ -79,9 +118,12 @@ def train(epoch):
         warmup_limit = (args.epochs // 4) if args.mode == 'iceberg_plus' else 0
         
         if epoch > warmup_limit and pseudo_mask.sum() > 0:
-            # 使用 pi_c 进行 Logit 调整
+            # 论文 Eq (8): q_j[c] = f_θ(v_j)[c] + μ·log π_c；Eq (7): L_unsup = -λ·E[ I(≥τ') ℓ(q_j, ŷ_j) ]
             logits_pseudo_adj = out[pseudo_mask] + args.mu * torch.log(pi_c + 1e-6)
             loss_unsup = F.cross_entropy(logits_pseudo_adj, pred_pseudo[pseudo_mask])
+            # 论文 Eq (9) Noise-Tolerant Double Balancing: 对称项 β·ℓ(ŷ_j, max(q_j))，此处实现为 (1+β)*CE
+            if args.mode == 'iceberg_original' and getattr(args, 'beta', 0.0) > 0:
+                loss_unsup = (1.0 + args.beta) * loss_unsup
             loss = loss_sup + args.lam * loss_unsup
         else:
             loss = loss_sup
